@@ -1,0 +1,11 @@
+# Required Python packages for the Allegro model development
+torch
+torchvision
+numpy
+scipy
+matplotlib
+pytest
+hydra-core
+nequip
+pytorch-lightning
+allegro
