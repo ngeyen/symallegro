@@ -2,7 +2,6 @@ import os
 import yaml
 import torch
 from model import AllegroModel
-from torch.utils.data import DataLoader
 from nequip.data.datamodule import sGDML_CCSD_DataModule
 from nequip.train import EMALightningModule
 from lightning import Trainer
@@ -20,9 +19,6 @@ def setup_data(config):
         trainval_test_subset=config['data']['trainval_test_subset'],
         train_val_split=config['data']['train_val_split'],
         seed=config['data']['seed'],
-        train_dataloader=DataLoader(batch_size=config['data']['train_dataloader']['batch_size']),
-        val_dataloader=DataLoader(batch_size=config['data']['val_dataloader']['batch_size']),
-        test_dataloader=DataLoader(batch_size=config['data']['test_dataloader']['batch_size']),
         stats_manager=config['data']['stats_manager']
     )
     return data_module
