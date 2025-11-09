@@ -41,3 +41,17 @@ def test_check_imports():
     except ImportError:
         pytest.fail(f"Import failed (AllegroModel): {e}")
 
+def test_model_instantiation():
+    """
+    Tests if the AllegroModel can be instantiated with default parameters.
+    """
+    from src.train import setup_data
+    
+    # load config from tutorial.yaml
+    import yaml
+    config_path = os.path.join(os.path.dirname(__file__), '../configs/tutorial.yaml')
+    with open(config_path, 'r') as file:
+        config = yaml.safe_load(file)
+    data = setup_data(config)
+    
+    assert data is not None, "Data module setup failed."
