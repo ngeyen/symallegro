@@ -1,80 +1,236 @@
 import os
-import yaml
-import torch
-from model import AllegroModel
+from omegaconf import OmegaConf
+
 from nequip.data.datamodule import sGDML_CCSD_DataModule
 from nequip.train import EMALightningModule
 from lightning import Trainer
+from model.allegro_models import AllegroModel
+from nequip.utils.global_state import set_global_state, global_state_initialized
+
 
 def load_config(config_path):
-    with open(config_path, 'r') as file:
-        config = yaml.safe_load(file)
-    return config
+    # Keep interpolation nodes instead of plain dict
+    return OmegaConf.load(config_path)
+
+
+def init_nequip_global_state(config):
+    allow_tf32 = bool(config.get("global_options", {}).get("allow_tf32", False))
+    set_global_state(allow_tf32=allow_tf32, warn_on_override=False)
+
+
+def _resolve_data_source_dir(raw_dir: str) -> str:
+    """Return an absolute existing path for the data_source_dir."""
+    if os.path.isabs(raw_dir):
+        return raw_dir
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    candidates = [
+        os.path.join(root, raw_dir),
+        os.path.join(root, "data", raw_dir),
+    ]
+    for c in candidates:
+        if os.path.isdir(c):
+            return c
+    raise FileNotFoundError(
+        f"Could not locate data_source_dir '{raw_dir}'. Tried: {candidates}"
+    )
+
 
 def setup_data(config):
+    data_cfg = OmegaConf.to_container(config.data, resolve=True)
+
+    tvt = data_cfg["trainval_test_subset"]
+    if isinstance(tvt, int):
+        tvt = [tvt, 0]
+    data_cfg["trainval_test_subset"] = tvt
+
+    tv_split = data_cfg["train_val_split"]
+    if isinstance(tv_split, float):
+        total_trainval = tvt[0]
+        train_count = int(round(total_trainval * tv_split))
+        val_count = max(total_trainval - train_count, 1)
+        data_cfg["train_val_split"] = [train_count, val_count]
+
+    data_source_dir = _resolve_data_source_dir(data_cfg["data_source_dir"])
     data_module = sGDML_CCSD_DataModule(
-        dataset=config['data']['dataset'],
-        data_source_dir=config['data']['data_source_dir'],
-        transforms=config['data']['transforms'],
-        trainval_test_subset=config['data']['trainval_test_subset'],
-        train_val_split=config['data']['train_val_split'],
-        seed=config['data']['seed'],
-        stats_manager=config['data']['stats_manager']
+        dataset=str(data_cfg["dataset"]),
+        data_source_dir=data_source_dir,
+        transforms=data_cfg["transforms"],
+        trainval_test_subset=data_cfg["trainval_test_subset"],
+        train_val_split=data_cfg["train_val_split"],
+        seed=data_cfg["seed"],
+        stats_manager=data_cfg["stats_manager"],
     )
+
+    # Build datasets so we can consolidate
+    try:
+        data_module.setup(stage="fit")
+    except TypeError:
+        data_module.setup()
+
+    # Ensure only one training dataset (pick first if list)
+    for attr in ["train_dataset", "val_dataset", "test_dataset"]:
+        ds = getattr(data_module, attr, None)
+        if isinstance(ds, list):
+            if len(ds) == 0:
+                continue
+            setattr(data_module, attr, ds[0])
+
     return data_module
 
+
+def _inject_training_stats_into_cfg(cfg, data_module):
+    try:
+        data_module.setup(stage="fit")
+    except TypeError:
+        data_module.setup()
+
+    stats = None
+    if hasattr(data_module, "stats_manager"):
+        sm = data_module.stats_manager
+        # Try method to get full stats object
+        for meth in ("compute_stats", "get_stats"):
+            if hasattr(sm, meth):
+                try:
+                    stats = getattr(sm, meth)()
+                    break
+                except Exception:
+                    pass
+        # Fallback: collect attributes
+        if stats is None:
+            stats = {}
+            for k in ("num_neighbors_mean", "per_atom_energy_mean", "forces_rms"):
+                if hasattr(sm, k):
+                    stats[k] = getattr(sm, k)
+
+    # Fallback defaults
+    if not stats:
+        type_names = list(cfg.get("model_type_names", [])) or ["X"]
+        stats = {
+            "num_neighbors_mean": 12.0,
+            "per_atom_energy_mean": [0.0] * len(type_names),
+            "forces_rms": [1.0] * len(type_names),
+        }
+
+    # Ensure per-type lists become dicts keyed by symbols
+    type_names = list(cfg.get("model_type_names", [])) or list(cfg.training_module.model.type_names)
+    def list_to_dict(val):
+        if isinstance(val, (list, tuple)) and len(val) == len(type_names):
+            return {sym: float(v) for sym, v in zip(type_names, val)}
+        return val
+    stats["per_atom_energy_mean"] = list_to_dict(stats.get("per_atom_energy_mean"))
+    stats["forces_rms"] = list_to_dict(stats.get("forces_rms"))
+
+    # Convert numpy/tensors
+    def _to_plain(v):
+        try:
+            import torch, numpy as np
+            if isinstance(v, torch.Tensor):
+                v = v.detach().cpu().numpy()
+            if isinstance(v, np.ndarray):
+                return v.tolist()
+        except Exception:
+            pass
+        return v
+
+    stats_plain = {k: _to_plain(v) for k, v in stats.items()}
+    # Inject
+    cfg.training_data_stats = OmegaConf.create(stats_plain)
+
+
 def setup_model(config):
+    if not global_state_initialized():
+        init_nequip_global_state(config)
+
+    # Ensure training_data_stats present (tests may call directly)
+    if "training_data_stats" not in config:
+        # Minimal dummy injection (no DataModule available here)
+        _inject_training_stats_into_cfg(config, setup_data(config))
+
+    model_cfg = OmegaConf.to_container(config.training_module.model, resolve=True)
+
     model = AllegroModel(
-        seed=config['training_module']['model']['seed'],
-        model_dtype=config['training_module']['model']['model_dtype'],
-        type_names=config['training_module']['model']['type_names'],
-        r_max=config['training_module']['model']['r_max'],
-        radial_chemical_embed=config['training_module']['model']['radial_chemical_embed'],
-        radial_chemical_embed_dim=config['training_module']['model']['radial_chemical_embed_dim'],
-        scalar_embed_mlp_hidden_layers_depth=config['training_module']['model']['scalar_embed_mlp_hidden_layers_depth'],
-        scalar_embed_mlp_hidden_layers_width=config['training_module']['model']['scalar_embed_mlp_hidden_layers_width'],
-        scalar_embed_mlp_nonlinearity=config['training_module']['model']['scalar_embed_mlp_nonlinearity'],
-        l_max=config['training_module']['model']['l_max'],
-        num_layers=config['training_module']['model']['num_layers'],
-        num_scalar_features=config['training_module']['model']['num_scalar_features'],
-        num_tensor_features=config['training_module']['model']['num_tensor_features'],
-        allegro_mlp_hidden_layers_depth=config['training_module']['model']['allegro_mlp_hidden_layers_depth'],
-        allegro_mlp_hidden_layers_width=config['training_module']['model']['allegro_mlp_hidden_layers_width'],
-        allegro_mlp_nonlinearity=config['training_module']['model']['allegro_mlp_nonlinearity'],
-        parity=config['training_module']['model']['parity'],
-        tp_path_channel_coupling=config['training_module']['model']['tp_path_channel_coupling'],
-        readout_mlp_hidden_layers_depth=config['training_module']['model']['readout_mlp_hidden_layers_depth'],
-        readout_mlp_hidden_layers_width=config['training_module']['model']['readout_mlp_hidden_layers_width'],
-        readout_mlp_nonlinearity=config['training_module']['model']['readout_mlp_nonlinearity'],
-        avg_num_neighbors=config['training_module']['model']['avg_num_neighbors'],
-        per_type_energy_shifts=config['training_module']['model']['per_type_energy_shifts'],
-        per_type_energy_scales=config['training_module']['model']['per_type_energy_scales'],
-        per_type_energy_scales_trainable=config['training_module']['model']['per_type_energy_scales_trainable'],
-        per_type_energy_shifts_trainable=config['training_module']['model']['per_type_energy_shifts_trainable'],
-        pair_potential=config['training_module']['model']['pair_potential']
+        seed=model_cfg["seed"],
+        model_dtype=model_cfg["model_dtype"],
+        type_names=model_cfg["type_names"],
+        r_max=model_cfg["r_max"],
+        radial_chemical_embed=model_cfg["radial_chemical_embed"],
+        radial_chemical_embed_dim=model_cfg["radial_chemical_embed_dim"],
+        scalar_embed_mlp_hidden_layers_depth=model_cfg["scalar_embed_mlp_hidden_layers_depth"],
+        scalar_embed_mlp_hidden_layers_width=model_cfg["scalar_embed_mlp_hidden_layers_width"],
+        scalar_embed_mlp_nonlinearity=model_cfg["scalar_embed_mlp_nonlinearity"],
+        l_max=model_cfg["l_max"],
+        num_layers=model_cfg["num_layers"],
+        num_scalar_features=model_cfg["num_scalar_features"],
+        num_tensor_features=model_cfg["num_tensor_features"],
+        allegro_mlp_hidden_layers_depth=model_cfg["allegro_mlp_hidden_layers_depth"],
+        allegro_mlp_hidden_layers_width=model_cfg["allegro_mlp_hidden_layers_width"],
+        allegro_mlp_nonlinearity=model_cfg["allegro_mlp_nonlinearity"],
+        parity=model_cfg["parity"],
+        tp_path_channel_coupling=model_cfg["tp_path_channel_coupling"],
+        readout_mlp_hidden_layers_depth=model_cfg["readout_mlp_hidden_layers_depth"],
+        readout_mlp_hidden_layers_width=model_cfg["readout_mlp_hidden_layers_width"],
+        readout_mlp_nonlinearity=model_cfg["readout_mlp_nonlinearity"],
+        avg_num_neighbors=model_cfg["avg_num_neighbors"],
+        per_type_energy_shifts=model_cfg["per_type_energy_shifts"],
+        per_type_energy_scales=model_cfg["per_type_energy_scales"],
+        per_type_energy_scales_trainable=model_cfg["per_type_energy_scales_trainable"],
+        per_type_energy_shifts_trainable=model_cfg["per_type_energy_shifts_trainable"],
+        pair_potential=model_cfg["pair_potential"],
     )
     return model
 
+
+def _infer_num_datasets(dm):
+    def _count(ds):
+        if ds is None:
+            return 0
+        if isinstance(ds, (list, tuple)):
+            return len(ds)
+        return 1
+    return {
+        "train": _count(getattr(dm, "train_dataset", None)),
+        "val": _count(getattr(dm, "val_dataset", None)),
+        "test": _count(getattr(dm, "test_dataset", None)),
+        "predict": 0,
+    }
+
 def main():
-    config_path = os.path.join(os.path.dirname(__file__), '../configs/tutorial.yaml')
+    config_path = os.path.join(os.path.dirname(__file__), "../configs/tutorial.yaml")
     config = load_config(config_path)
 
+    init_nequip_global_state(config)
+
     data_module = setup_data(config)
-    model = setup_model(config)
+    # ensure datasets are built
+    try:
+        data_module.setup(stage="fit")
+    except TypeError:
+        data_module.setup()
+
+    # inject stats BEFORE resolving training_module
+    _inject_training_stats_into_cfg(config, data_module)
+
+    num_datasets = _infer_num_datasets(data_module)
+    if num_datasets["train"] != 1:
+        raise RuntimeError(f"Expected exactly 1 train dataset, found {num_datasets['train']}.")
+
+    trainer_cfg = OmegaConf.to_container(config.trainer, resolve=True)
+    tm_cfg = OmegaConf.to_container(config.training_module, resolve=True)
+    model_cfg = OmegaConf.to_container(config.training_module.model, resolve=True)
 
     trainer = Trainer(
-        max_epochs=config['trainer']['max_epochs'],
-        check_val_every_n_epoch=config['trainer']['check_val_every_n_epoch'],
-        log_every_n_steps=config['trainer']['log_every_n_steps'],
-        callbacks=config['trainer']['callbacks']
+        max_epochs=trainer_cfg["max_epochs"],
+        check_val_every_n_epoch=trainer_cfg.get("check_val_every_n_epoch", 1),
+        log_every_n_steps=trainer_cfg.get("log_every_n_steps", 50),
     )
 
     training_module = EMALightningModule(
-        model=model,
-        loss=config['training_module']['loss'],
-        val_metrics=config['training_module']['val_metrics'],
-        test_metrics=config['training_module']['test_metrics'],
-        optimizer=config['training_module']['optimizer']
+        model=model_cfg,
+        loss=tm_cfg["loss"],
+        val_metrics=tm_cfg["val_metrics"],
+        test_metrics=tm_cfg["test_metrics"],
+        optimizer=tm_cfg["optimizer"],
+        num_datasets=num_datasets,
     )
 
     trainer.fit(training_module, data_module)
