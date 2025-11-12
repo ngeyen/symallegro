@@ -8,14 +8,10 @@ from model.allegro_models import AllegroModel
 from nequip.utils.global_state import set_global_state, global_state_initialized
 
 
-def load_config(config_path):
-    # Keep interpolation nodes instead of plain dict
-    return OmegaConf.load(config_path)
-
 
 def init_nequip_global_state(config):
     allow_tf32 = bool(config.get("global_options", {}).get("allow_tf32", False))
-    set_global_state(allow_tf32=allow_tf32, warn_on_override=False)
+    set_global_state(allow_tf32=allow_tf32)
 
 
 def _resolve_data_source_dir(raw_dir: str) -> str:
@@ -61,13 +57,10 @@ def setup_data(config):
         stats_manager=data_cfg["stats_manager"],
     )
 
-    # Build datasets so we can consolidate
-    try:
-        data_module.setup(stage="fit")
-    except TypeError:
-        data_module.setup()
+    # Consolidate data module setup
+    data_module.setup(stage="fit")
 
-    # Ensure only one training dataset (pick first if list)
+    # Ensure only one training dataset for simplicity
     for attr in ["train_dataset", "val_dataset", "test_dataset"]:
         ds = getattr(data_module, attr, None)
         if isinstance(ds, list):
@@ -79,12 +72,11 @@ def setup_data(config):
 
 
 def _inject_training_stats_into_cfg(cfg, data_module):
-    try:
-        data_module.setup(stage="fit")
-    except TypeError:
-        data_module.setup()
-
+    '''Extract training data statistics from data module and inject into config.'''
+    
+    data_module.setup(stage="fit")
     stats = None
+    
     if hasattr(data_module, "stats_manager"):
         sm = data_module.stats_manager
         # Try method to get full stats object
@@ -120,7 +112,7 @@ def _inject_training_stats_into_cfg(cfg, data_module):
     stats["per_atom_energy_mean"] = list_to_dict(stats.get("per_atom_energy_mean"))
     stats["forces_rms"] = list_to_dict(stats.get("forces_rms"))
 
-    # Convert numpy/tensors
+    # Convert to plain python types
     def _to_plain(v):
         try:
             import torch, numpy as np
@@ -141,9 +133,9 @@ def setup_model(config):
     if not global_state_initialized():
         init_nequip_global_state(config)
 
-    # Ensure training_data_stats present (tests may call directly)
+    # Ensure training_data_stats present
     if "training_data_stats" not in config:
-        # Minimal dummy injection (no DataModule available here)
+        # Build data module to get stats
         _inject_training_stats_into_cfg(config, setup_data(config))
 
     model_cfg = OmegaConf.to_container(config.training_module.model, resolve=True)
@@ -196,7 +188,7 @@ def _infer_num_datasets(dm):
 
 def main():
     config_path = os.path.join(os.path.dirname(__file__), "../configs/tutorial.yaml")
-    config = load_config(config_path)
+    config = OmegaConf.load(config_path)
 
     init_nequip_global_state(config)
 
@@ -207,7 +199,7 @@ def main():
     except TypeError:
         data_module.setup()
 
-    # inject stats BEFORE resolving training_module
+    # inject stats 
     _inject_training_stats_into_cfg(config, data_module)
 
     num_datasets = _infer_num_datasets(data_module)
