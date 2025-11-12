@@ -6,6 +6,7 @@ chemical_symbols: [C, O, H]
 model_type_names: ${chemical_symbols}
 
 data:
+  seed: 123
   _target_: nequip.data.datamodule.sGDML_CCSD_DataModule
   dataset: aspirin
   data_source_dir: aspirin_data
@@ -16,7 +17,6 @@ data:
       chemical_symbols: ${chemical_symbols}
   trainval_test_subset: [50, 10]   # train+val subset size, test subset size
   train_val_split: 0.75         
-  seed: 123
   train_dataloader:
     _target_: torch.utils.data.DataLoader
     batch_size: 1
