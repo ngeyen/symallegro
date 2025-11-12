@@ -1,7 +1,7 @@
-# Allegro Local Development
+# Symmetry Aware Allegro
 
 ## Overview
-This project is a local development environment for the Allegro model, designed for research and experimentation. The Allegro model is a machine learning framework for simulating molecular interactions and properties.
+This project is adding Symmetry awareness to the Allegro model, designed for research and experimentation. The Allegro model is a machine learning framework for simulating molecular interactions and properties.
 
 ## Project Structure
 - **src/allegro**: Contains the source code for the Allegro model, including modules and classes that define the model's architecture and functionality.
