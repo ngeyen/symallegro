@@ -14,8 +14,8 @@ data:
       r_max: ${cutoff_radius}
     - _target_: nequip.data.transforms.ChemicalSpeciesToAtomTypeMapper
       chemical_symbols: ${chemical_symbols}
-  trainval_test_subset: [40, 10]
-  train_val_split: [30, 10]
+  trainval_test_subset: [50, 10]   # train+val subset size, test subset size
+  train_val_split: 0.75         
   seed: 123
   train_dataloader:
     _target_: torch.utils.data.DataLoader
@@ -35,7 +35,7 @@ trainer:
   log_every_n_steps: 5
   callbacks:
     - _target_: lightning.pytorch.callbacks.ModelCheckpoint
-      dirpath: ${hydra:runtime.output_dir}
+      dirpath: outputs/checkpoints
       save_last: true
 
 num_scalar_features: 64
@@ -58,42 +58,38 @@ training_module:
     _target_: torch.optim.Adam
     lr: 0.001
   model:
-    _target_: allegro.model.AllegroModel
-    compile_mode: compile
+    _target_: model.allegro_models.AllegroModel
     seed: 456
     model_dtype: float32
     type_names: ${model_type_names}
     r_max: ${cutoff_radius}
     radial_chemical_embed:
-      _target_: allegro.nn.TwoBodyBesselScalarEmbed
+      _target_: nn.TwoBodyBesselScalarEmbed
       num_bessels: 8
       bessel_trainable: false
       polynomial_cutoff_p: 6
-    radial_chemical_embed_dim: ${num_scalar_features}
-    scalar_embed_mlp_hidden_layers_depth: 1
-    scalar_embed_mlp_hidden_layers_width: ${num_scalar_features}
-    scalar_embed_mlp_nonlinearity: silu
+    radial_chemical_embed_dim: 64
     l_max: 1
-    num_layers: 2
+    num_layers: 3
     num_scalar_features: ${num_scalar_features}
-    num_tensor_features: 32
-    allegro_mlp_hidden_layers_depth: 1
-    allegro_mlp_hidden_layers_width: ${num_scalar_features}
+    num_tensor_features: 16
+    scalar_embed_mlp_hidden_layers_depth: 2
+    scalar_embed_mlp_hidden_layers_width: 64
+    scalar_embed_mlp_nonlinearity: silu
+    allegro_mlp_hidden_layers_depth: 2
+    allegro_mlp_hidden_layers_width: 64
     allegro_mlp_nonlinearity: silu
-    parity: true
-    tp_path_channel_coupling: true
-    readout_mlp_hidden_layers_depth: 1
-    readout_mlp_hidden_layers_width: ${num_scalar_features}
+    parity: o3_full
+    tp_path_channel_coupling: none
+    readout_mlp_hidden_layers_depth: 2
+    readout_mlp_hidden_layers_width: 64
     readout_mlp_nonlinearity: silu
-    avg_num_neighbors: ${training_data_stats:num_neighbors_mean}
-    per_type_energy_shifts: ${training_data_stats:per_atom_energy_mean}
-    per_type_energy_scales: ${training_data_stats:forces_rms}
-    per_type_energy_scales_trainable: false
-    per_type_energy_shifts_trainable: false
-    pair_potential:
-      _target_: nequip.nn.pair_potential.ZBL
-      units: real
-      chemical_species: ${chemical_symbols}
+    avg_num_neighbors: ${training_data_stats.num_neighbors_mean}
+    per_type_energy_shifts: ${training_data_stats.per_atom_energy_mean}
+    per_type_energy_scales: ${training_data_stats.forces_rms}
+    per_type_energy_scales_trainable: []
+    per_type_energy_shifts_trainable: []
+    pair_potential: null
 
 global_options:
   allow_tf32: false
