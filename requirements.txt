@@ -1,4 +1,3 @@
-# Required Python packages for the Allegro model development
 torch
 torchvision
 numpy
@@ -8,4 +7,4 @@ pytest
 hydra-core
 nequip
 pytorch-lightning
-allegro
+lightning[extra]
