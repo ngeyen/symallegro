@@ -8,3 +8,4 @@ hydra-core
 nequip
 pytorch-lightning
 lightning[extra]
+wandb
