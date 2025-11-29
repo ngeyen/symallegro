@@ -7,5 +7,5 @@ __pycache__/
 .vscode/
 .idea/
 *logs
-*venv/
+*venv/*
 virtualenv/
