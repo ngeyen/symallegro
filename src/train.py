@@ -210,10 +210,15 @@ def main():
     tm_cfg = OmegaConf.to_container(config.training_module, resolve=True)
     model_cfg = OmegaConf.to_container(config.training_module.model, resolve=True)
 
+    # WandB Logger
+    from lightning.pytorch.loggers import WandbLogger
+    wandb_logger = WandbLogger(project="allegro-training", log_model=True)
+
     trainer = Trainer(
         max_epochs=trainer_cfg["max_epochs"],
         check_val_every_n_epoch=trainer_cfg.get("check_val_every_n_epoch", 1),
         log_every_n_steps=trainer_cfg.get("log_every_n_steps", 50),
+        logger=wandb_logger,
     )
 
     training_module = EMALightningModule(
