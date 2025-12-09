@@ -14,7 +14,11 @@ data:
     - _target_: nequip.data.transforms.NeighborListTransform
       r_max: ${cutoff_radius}
     - _target_: nequip.data.transforms.ChemicalSpeciesToAtomTypeMapper
-      chemical_symbols: ${chemical_symbols}
+      model_type_names: ${chemical_symbols}
+      chemical_species_to_atom_type_map:
+        C: C
+        O: O
+        H: H
   trainval_test_subset: [50, 10]   # train+val subset size, test subset size
   train_val_split: 0.75         
   train_dataloader:
