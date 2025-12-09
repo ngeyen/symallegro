@@ -1,15 +1,16 @@
 # /allegro/configs/tutorial.yaml
 run: [train, test]
 
-cutoff_radius: 5.0
+cutoff_radius: 6.0
 chemical_symbols: [C, O, H]
 model_type_names: ${chemical_symbols}
 
 data:
   seed: 123
-  _target_: nequip.data.datamodule.sGDML_CCSD_DataModule
-  dataset: aspirin
-  data_source_dir: aspirin_data
+  _target_: nequip.data.datamodule.NPZDataModule
+  dataset_file_name: ./data/rmd17/npz_data/rmd17_aspirin.npz
+  train_val_split: [80000, 20000]
+  shuffle: true
   transforms:
     - _target_: nequip.data.transforms.NeighborListTransform
       r_max: ${cutoff_radius}
@@ -19,14 +20,14 @@ data:
         C: C
         O: O
         H: H
-  trainval_test_subset: [50, 10]   # train+val subset size, test subset size
-  train_val_split: 0.75         
   train_dataloader:
     _target_: torch.utils.data.DataLoader
-    batch_size: 1
+    batch_size: 5
+    shuffle: true
   val_dataloader:
     _target_: torch.utils.data.DataLoader
     batch_size: 5
+    shuffle: false
   test_dataloader: ${data.val_dataloader}
   stats_manager:
     _target_: nequip.data.CommonDataStatisticsManager
@@ -73,8 +74,8 @@ training_module:
       bessel_trainable: false
       polynomial_cutoff_p: 6
     radial_chemical_embed_dim: 64
-    l_max: 1
-    num_layers: 3
+    l_max: 2
+    num_layers: 2
     num_scalar_features: ${num_scalar_features}
     num_tensor_features: 16
     scalar_embed_mlp_hidden_layers_depth: 2
@@ -84,7 +85,7 @@ training_module:
     allegro_mlp_hidden_layers_width: 64
     allegro_mlp_nonlinearity: silu
     parity: o3_full
-    tp_path_channel_coupling: none
+    tp_path_channel_coupling: true
     readout_mlp_hidden_layers_depth: 2
     readout_mlp_hidden_layers_width: 64
     readout_mlp_nonlinearity: silu
