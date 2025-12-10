@@ -1,0 +1,99 @@
+# /allegro/configs/tutorial.yaml
+run: [train, test]
+
+cutoff_radius: 6.0
+chemical_symbols: [C, O, H]
+model_type_names: ${chemical_symbols}
+
+data:
+  seed: 123
+  _target_: nequip.data.datamodule.sGDML_CCSD_DataModule
+  dataset: aspirin
+  data_source_dir: aspirin_data
+  transforms:
+    - _target_: nequip.data.transforms.NeighborListTransform
+      r_max: ${cutoff_radius}
+    - _target_: nequip.data.transforms.ChemicalSpeciesToAtomTypeMapper
+      model_type_names: ${chemical_symbols}
+      chemical_species_to_atom_type_map:
+        C: C
+        O: O
+        H: H
+  trainval_test_subset: [5000, 1000]  
+  train_val_split: 0.75       
+  train_dataloader:
+    _target_: torch.utils.data.DataLoader
+    batch_size: 1
+  val_dataloader:
+    _target_: torch.utils.data.DataLoader
+    batch_size: 5
+  test_dataloader: ${data.val_dataloader}
+  stats_manager:
+    _target_: nequip.data.CommonDataStatisticsManager
+    type_names: ${model_type_names}
+
+trainer:
+  _target_: lightning.Trainer
+  max_epochs: 5
+  check_val_every_n_epoch: 1
+  log_every_n_steps: 5
+  callbacks:
+    - _target_: lightning.pytorch.callbacks.ModelCheckpoint
+      dirpath: outputs/checkpoints
+      save_last: true
+
+num_scalar_features: 64
+
+training_module:
+  _target_: nequip.train.EMALightningModule
+  loss:
+    _target_: nequip.train.EnergyForceLoss
+    per_atom_energy: true
+    coeffs:
+      total_energy: 1.0
+      forces: 1.0
+  val_metrics:
+    _target_: nequip.train.EnergyForceMetrics
+    coeffs:
+      per_atom_energy_mae: 1.0
+      forces_mae: 1.0
+  test_metrics: ${training_module.val_metrics}
+  optimizer:
+    _target_: torch.optim.Adam
+    lr: 0.001
+  model:
+    _target_: model.allegro_models.AllegroModel
+    seed: 456
+    model_dtype: float32
+    type_names: ${model_type_names}
+    r_max: ${cutoff_radius}
+    radial_chemical_embed:
+      _target_: nn.TwoBodyBesselScalarEmbed
+      num_bessels: 8
+      bessel_trainable: false
+      polynomial_cutoff_p: 6
+    radial_chemical_embed_dim: 64
+    l_max: 2
+    num_layers: 2
+    num_scalar_features: ${num_scalar_features}
+    num_tensor_features: 16
+    scalar_embed_mlp_hidden_layers_depth: 2
+    scalar_embed_mlp_hidden_layers_width: 64
+    scalar_embed_mlp_nonlinearity: silu
+    allegro_mlp_hidden_layers_depth: 2
+    allegro_mlp_hidden_layers_width: 64
+    allegro_mlp_nonlinearity: silu
+    parity: o3_full
+    tp_path_channel_coupling: none
+    readout_mlp_hidden_layers_depth: 2
+    readout_mlp_hidden_layers_width: 64
+    readout_mlp_nonlinearity: silu
+    avg_num_neighbors: ${training_data_stats.num_neighbors_mean}
+    per_type_energy_shifts: ${training_data_stats.per_atom_energy_mean}
+    per_type_energy_scales: ${training_data_stats.forces_rms}
+    per_type_energy_scales_trainable: []
+    per_type_energy_shifts_trainable: []
+    pair_potential: null
+
+global_options:
+  allow_tf32: false
