@@ -31,10 +31,44 @@ def _resolve_data_source_dir(raw_dir: str) -> str:
     )
 
 
-from hydra.utils import instantiate
-
 def setup_data(config):
-    return instantiate(config.data)
+    data_cfg = OmegaConf.to_container(config.data, resolve=True)
+
+    tvt = data_cfg["trainval_test_subset"]
+    if isinstance(tvt, int):
+        tvt = [tvt, 0]
+    data_cfg["trainval_test_subset"] = tvt
+
+    tv_split = data_cfg["train_val_split"]
+    if isinstance(tv_split, float):
+        total_trainval = tvt[0]
+        train_count = int(round(total_trainval * tv_split))
+        val_count = max(total_trainval - train_count, 1)
+        data_cfg["train_val_split"] = [train_count, val_count]
+
+    data_source_dir = _resolve_data_source_dir(data_cfg["data_source_dir"])
+    data_module = sGDML_CCSD_DataModule(
+        dataset=str(data_cfg["dataset"]),
+        data_source_dir=data_source_dir,
+        transforms=data_cfg["transforms"],
+        trainval_test_subset=data_cfg["trainval_test_subset"],
+        train_val_split=data_cfg["train_val_split"],
+        seed=data_cfg["seed"],
+        stats_manager=data_cfg["stats_manager"],
+    )
+
+    # Consolidate data module setup
+    data_module.setup(stage="fit")
+
+    # Ensure only one training dataset for simplicity
+    for attr in ["train_dataset", "val_dataset", "test_dataset"]:
+        ds = getattr(data_module, attr, None)
+        if isinstance(ds, list):
+            if len(ds) == 0:
+                continue
+            setattr(data_module, attr, ds[0])
+
+    return data_module
 
 
 def _inject_training_stats_into_cfg(cfg, data_module):
@@ -153,7 +187,7 @@ def _infer_num_datasets(dm):
     }
 
 def main():
-    config_path = os.path.join(os.path.dirname(__file__), "../configs/tutorial.yaml")
+    config_path = os.path.join(os.path.dirname(__file__), "../configs/full_allegro.yaml")
     config = OmegaConf.load(config_path)
 
     init_nequip_global_state(config)
