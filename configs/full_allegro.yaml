@@ -19,7 +19,7 @@ data:
         C: C
         O: O
         H: H
-  trainval_test_subset: [5000, 1000]  
+  trainval_test_subset: [1000, 400]  
   train_val_split: 0.75       
   train_dataloader:
     _target_: torch.utils.data.DataLoader
