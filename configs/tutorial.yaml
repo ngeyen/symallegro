@@ -7,8 +7,8 @@ model_type_names: ${chemical_symbols}
 
 data:
   seed: 123
-  _target_: nequip.data.datamodule.NPZDataModule
-  dataset_file_name: ./data/rmd17/npz_data/rmd17_aspirin.npz
+  _target_: src.datamodule.NPZDataModule
+  dataset_file_name: ./data/rmd17/rmd17/npz_data/rmd17_aspirin.npz
   train_val_split: [80000, 20000]
   shuffle: true
   transforms:
